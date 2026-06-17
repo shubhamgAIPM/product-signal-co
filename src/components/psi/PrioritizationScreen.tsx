@@ -1,8 +1,11 @@
-import { useMemo, useState } from "react";
-import { ArrowLeft, Printer, AlertOctagon, Zap, MinusCircle, Save } from "lucide-react";
-import { MOCK_PRIORITIZATION, type Priority, type Theme } from "@/lib/psi-mock";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowLeft, Printer, AlertOctagon, Zap, MinusCircle, Save, Loader2, CheckCircle2 } from "lucide-react";
+import type { Priority, PrioritizationResponse, Theme } from "@/lib/psi-mock";
+import { fetchPrioritization, saveAdjustment } from "@/lib/psi-api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { LoadingPanel, ErrorPanel } from "./StatusPanels";
+import { toast } from "sonner";
 
 interface Props { onBack: () => void; }
 
@@ -78,7 +81,9 @@ function ScoreSlider({
 function ThemeCard({ theme }: { theme: Theme }) {
   const [scores, setScores] = useState(theme.scores);
   const [dirty, setDirty] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const total = useMemo(() => {
     return Math.min(scores.frequency + scores.revenue + scores.customer + scores.churn + scores.strategic, 100);
@@ -88,8 +93,29 @@ function ThemeCard({ theme }: { theme: Theme }) {
   const handleChange = (key: keyof Theme["scores"], v: number) => {
     setScores((s) => ({ ...s, [key]: v }));
     setDirty(true);
-    setSaved(false);
+    setSavedAt(null);
+    setSaveError(null);
   };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const res = await saveAdjustment(scores, theme.theme_id);
+      if (!res?.success) throw new Error("API did not confirm success");
+      setSavedAt(Date.now());
+      setDirty(false);
+      toast.success(`Saved · ${theme.theme_name}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Save failed";
+      setSaveError(msg);
+      toast.error(`Couldn't save ${theme.theme_name}`, { description: msg });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const justSaved = savedAt !== null && !dirty;
 
   return (
     <article className="rounded-xl border border-border bg-card shadow-[var(--shadow-card)]">
@@ -98,6 +124,11 @@ function ThemeCard({ theme }: { theme: Theme }) {
           <div className="flex items-center gap-2">
             <h3 className="truncate text-base font-semibold text-foreground">{theme.theme_name}</h3>
             {dirty && <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary ring-1 ring-inset ring-primary/30">Adjusted</span>}
+            {justSaved && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-300 ring-1 ring-inset ring-emerald-500/30">
+                <CheckCircle2 className="h-3 w-3" /> Saved
+              </span>
+            )}
           </div>
           <p className="mt-1 text-sm text-muted-foreground">{theme.problem_statement}</p>
         </div>
@@ -113,17 +144,22 @@ function ThemeCard({ theme }: { theme: Theme }) {
         ))}
       </div>
 
-      <div className="flex items-center justify-between border-t border-border px-5 py-3">
-        <PriorityBadge priority={priority} />
+      <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-3">
+        <div className="flex items-center gap-3">
+          <PriorityBadge priority={priority} />
+          {saveError && (
+            <span className="text-[11px] text-destructive">Save failed — retry</span>
+          )}
+        </div>
         <Button
           size="sm"
-          variant={dirty ? "default" : "secondary"}
-          disabled={!dirty}
-          onClick={() => { setSaved(true); setDirty(false); }}
+          variant={dirty || saveError ? "default" : "secondary"}
+          disabled={!dirty || saving}
+          onClick={handleSave}
           className="gap-1.5"
         >
-          <Save className="h-3.5 w-3.5" />
-          {saved ? "Saved" : "Save Adjustment"}
+          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+          {saving ? "Saving…" : justSaved ? "Saved" : saveError ? "Retry Save" : "Save Adjustment"}
         </Button>
       </div>
 
@@ -162,8 +198,30 @@ function ThemeCard({ theme }: { theme: Theme }) {
 }
 
 export function PrioritizationScreen({ onBack }: Props) {
-  const data = MOCK_PRIORITIZATION;
-  const { executive_summary: ex, prioritization } = data;
+  const [data, setData] = useState<PrioritizationResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetchPrioritization();
+      setData(res);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unable to reach the prioritization API.";
+      setError(msg);
+      toast.error("Failed to generate prioritization", { description: msg });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!data && !loading && !error) void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const priorities: Priority[] = ["P0", "P1", "P2", "P3"];
 
   return (
@@ -181,73 +239,85 @@ export function PrioritizationScreen({ onBack }: Props) {
         </div>
         <div className="flex items-center gap-2">
           <Button variant="ghost" onClick={onBack} className="gap-2"><ArrowLeft className="h-4 w-4" /> Back</Button>
-          <Button variant="secondary" onClick={() => window.print()} className="gap-2">
+          <Button variant="secondary" onClick={() => window.print()} disabled={!data} className="gap-2">
             <Printer className="h-4 w-4" /> Export PDF
           </Button>
         </div>
       </div>
 
-      {/* Executive summary */}
-      <section
-        className="overflow-hidden rounded-2xl border border-border p-6 shadow-[var(--shadow-card)]"
-        style={{ backgroundImage: "var(--gradient-primary)" }}
-      >
-        <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-primary-foreground/70">Executive Summary</div>
-        <div className="mt-4 grid grid-cols-2 gap-6 md:grid-cols-4">
-          {[
-            { label: "Total Themes", value: ex.total_themes },
-            { label: "Signals Analyzed", value: ex.total_signals },
-            { label: "ARR Impacted", value: `₹${ex.total_arr_impacted.toLocaleString()}` },
-            { label: "Critical Issues", value: ex.critical_themes.length },
-          ].map((s) => (
-            <div key={s.label}>
-              <div className="text-[10px] font-medium uppercase tracking-wider text-primary-foreground/70">{s.label}</div>
-              <div className="mt-1 font-mono text-3xl font-semibold tabular-nums text-primary-foreground">{s.value}</div>
-            </div>
-          ))}
-        </div>
+      {loading && <LoadingPanel label="Generating prioritization from latest signals…" />}
+      {!loading && error && (
+        <ErrorPanel
+          title="Couldn't generate prioritization"
+          message={error}
+          onRetry={load}
+        />
+      )}
 
-        <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-3">
-          {[
-            { icon: AlertOctagon, label: "Critical Themes", items: ex.critical_themes, tone: "text-red-300" },
-            { icon: Zap, label: "Quick Wins", items: ex.quick_wins, tone: "text-emerald-300" },
-            { icon: MinusCircle, label: "Low Priority — Ignore", items: ex.low_priority_to_ignore, tone: "text-muted-foreground" },
-          ].map((panel) => (
-            <div key={panel.label} className="rounded-xl border border-white/10 bg-black/25 p-4 backdrop-blur">
-              <div className={cn("flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider", panel.tone)}>
-                <panel.icon className="h-3.5 w-3.5" />
-                {panel.label}
-              </div>
-              <ul className="mt-2 space-y-1 text-sm text-primary-foreground">
-                {panel.items.map((t) => <li key={t} className="truncate">· {t}</li>)}
-              </ul>
+      {data && !loading && !error && (
+        <>
+          {/* Executive summary */}
+          <section
+            className="overflow-hidden rounded-2xl border border-border p-6 shadow-[var(--shadow-card)]"
+            style={{ backgroundImage: "var(--gradient-primary)" }}
+          >
+            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-primary-foreground/70">Executive Summary</div>
+            <div className="mt-4 grid grid-cols-2 gap-6 md:grid-cols-4">
+              {[
+                { label: "Total Themes", value: data.executive_summary.total_themes },
+                { label: "Signals Analyzed", value: data.executive_summary.total_signals },
+                { label: "ARR Impacted", value: `₹${data.executive_summary.total_arr_impacted.toLocaleString()}` },
+                { label: "Critical Issues", value: data.executive_summary.critical_themes.length },
+              ].map((s) => (
+                <div key={s.label}>
+                  <div className="text-[10px] font-medium uppercase tracking-wider text-primary-foreground/70">{s.label}</div>
+                  <div className="mt-1 font-mono text-3xl font-semibold tabular-nums text-primary-foreground">{s.value}</div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      </section>
 
-      {/* Themes grouped by priority */}
-      <div className="mt-10 space-y-10">
-        {priorities.map((p) => {
-          const themes = prioritization[p] ?? [];
-          if (themes.length === 0) return null;
-          const meta = PRIORITY_META[p];
-          return (
-            <section key={p}>
-              <div className="mb-4 flex items-center gap-3">
-                <PriorityBadge priority={p} />
-                <span className="text-xs text-muted-foreground">
-                  {themes.length} {themes.length === 1 ? "theme" : "themes"}
-                </span>
-                <div className={cn("h-px flex-1", "bg-border")} />
-              </div>
-              <div className="space-y-5">
-                {themes.map((t) => <ThemeCard key={t.theme_id} theme={t} />)}
-              </div>
-            </section>
-          );
-        })}
-      </div>
+            <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-3">
+              {[
+                { icon: AlertOctagon, label: "Critical Themes", items: data.executive_summary.critical_themes, tone: "text-red-300" },
+                { icon: Zap, label: "Quick Wins", items: data.executive_summary.quick_wins, tone: "text-emerald-300" },
+                { icon: MinusCircle, label: "Low Priority — Ignore", items: data.executive_summary.low_priority_to_ignore, tone: "text-muted-foreground" },
+              ].map((panel) => (
+                <div key={panel.label} className="rounded-xl border border-white/10 bg-black/25 p-4 backdrop-blur">
+                  <div className={cn("flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider", panel.tone)}>
+                    <panel.icon className="h-3.5 w-3.5" />
+                    {panel.label}
+                  </div>
+                  <ul className="mt-2 space-y-1 text-sm text-primary-foreground">
+                    {panel.items.map((t) => <li key={t} className="truncate">· {t}</li>)}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* Themes grouped by priority */}
+          <div className="mt-10 space-y-10">
+            {priorities.map((p) => {
+              const themes = data.prioritization[p] ?? [];
+              if (themes.length === 0) return null;
+              return (
+                <section key={p}>
+                  <div className="mb-4 flex items-center gap-3">
+                    <PriorityBadge priority={p} />
+                    <span className="text-xs text-muted-foreground">
+                      {themes.length} {themes.length === 1 ? "theme" : "themes"}
+                    </span>
+                    <div className={cn("h-px flex-1", "bg-border")} />
+                  </div>
+                  <div className="space-y-5">
+                    {themes.map((t) => <ThemeCard key={t.theme_id} theme={t} />)}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+        </>
+      )}
     </div>
   );
 }
