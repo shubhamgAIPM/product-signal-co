@@ -2,8 +2,11 @@ import { useState } from "react";
 import {
   Headset, Briefcase, AlertTriangle, MessageCircle, Lightbulb, Star, Loader2, ArrowRight,
 } from "lucide-react";
-import { MOCK_SOURCES, type SourcesResponse } from "@/lib/psi-mock";
+import type { SourcesResponse } from "@/lib/psi-mock";
+import { fetchSources } from "@/lib/psi-api";
 import { Button } from "@/components/ui/button";
+import { ErrorPanel } from "./StatusPanels";
+import { toast } from "sonner";
 
 const ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   headset: Headset,
@@ -14,6 +17,15 @@ const ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   star: Star,
 };
 
+const SOURCE_SKELETON = [
+  { id: "support_tickets", label: "Support Tickets", tool: "Zendesk / Freshdesk", icon: "headset" },
+  { id: "crm_sales", label: "CRM Sales Requests", tool: "HubSpot / Salesforce", icon: "briefcase" },
+  { id: "cs_escalations", label: "CS Escalations", tool: "Gainsight / Vitally", icon: "alert-triangle" },
+  { id: "nps_feedback", label: "NPS Feedback", tool: "Delighted / Qualtrics", icon: "message-circle" },
+  { id: "product_feedback", label: "Product Feedback", tool: "Canny / Productboard", icon: "lightbulb" },
+  { id: "app_reviews", label: "App Reviews", tool: "Play Store / App Store", icon: "star" },
+];
+
 interface Props {
   data: SourcesResponse | null;
   setData: (d: SourcesResponse) => void;
@@ -22,15 +34,25 @@ interface Props {
 
 export function DataSourcesScreen({ data, setData, onNext }: Props) {
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const empty = !data;
-  const sources = data?.sources ?? MOCK_SOURCES.sources.map(s => ({ ...s, total_records: 0, last_synced: undefined }));
+  const sources = data?.sources ?? SOURCE_SKELETON.map(s => ({ ...s, total_records: 0, preview: [] }));
 
   const handleFetch = async () => {
     setLoading(true);
-    await new Promise(r => setTimeout(r, 1400));
-    setData(MOCK_SOURCES);
-    setLoading(false);
+    setError(null);
+    try {
+      const result = await fetchSources();
+      setData(result);
+      toast.success("Sources synced", { description: `${result.total_signals} signals from ${result.sources.length} sources` });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unable to reach the signals API.";
+      setError(msg);
+      toast.error("Failed to fetch sources", { description: msg });
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -45,6 +67,16 @@ export function DataSourcesScreen({ data, setData, onNext }: Props) {
           Pull the latest signals from every customer touchpoint. The copilot ingests support, sales, success, and voice-of-customer streams in one pass.
         </p>
       </header>
+
+      {error && !loading && (
+        <div className="mb-8">
+          <ErrorPanel
+            title="Couldn't fetch sources"
+            message={error}
+            onRetry={handleFetch}
+          />
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
         {sources.map((s) => {
@@ -65,7 +97,7 @@ export function DataSourcesScreen({ data, setData, onNext }: Props) {
                       <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
                       <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
                     </span>
-                    Last synced {s.last_synced}
+                    {(s as { last_synced?: string }).last_synced ? `Last synced ${(s as { last_synced?: string }).last_synced}` : "Synced"}
                   </div>
                 )}
               </div>
@@ -108,6 +140,8 @@ export function DataSourcesScreen({ data, setData, onNext }: Props) {
             <><Loader2 className="h-4 w-4 animate-spin" /> Fetching sources…</>
           ) : data ? (
             <>Continue to Signal Review <ArrowRight className="h-4 w-4" /></>
+          ) : error ? (
+            <>Retry Fetch <ArrowRight className="h-4 w-4" /></>
           ) : (
             <>Fetch All Sources <ArrowRight className="h-4 w-4" /></>
           )}
