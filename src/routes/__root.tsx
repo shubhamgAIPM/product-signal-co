@@ -87,6 +87,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
       { name: "twitter:site", content: "@Lovable" },
+      { name: "twitter:title", content: "Product Signal Intelligence Copilot" },
+      { name: "twitter:description", content: "AI-native PM workspace for Chalo Insights — synthesize support, CRM, NPS and review signals into prioritized product themes." },
+      { property: "og:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/c92c15fe-41c0-44aa-bbc8-93c67138aabd" },
+      { name: "twitter:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/c92c15fe-41c0-44aa-bbc8-93c67138aabd" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
