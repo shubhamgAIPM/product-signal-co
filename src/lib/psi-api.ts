@@ -1,4 +1,4 @@
-import type { PrioritizationResponse, SourcesResponse, Theme } from "./psi-mock";
+import type { PrioritizationResponse, SourceData, SourcesResponse, Theme } from "./psi-mock";
 
 const BASE = "https://info15779.n8n-wsk.com/webhook";
 
@@ -19,8 +19,54 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   return Array.isArray(data) ? (data[0] as T) : (data as T);
 }
 
-export function fetchSources(): Promise<SourcesResponse> {
-  return jsonFetch<SourcesResponse>(ENDPOINTS.sources);
+// The n8n endpoint returns a flat { records: [...] } stream mixing all signal
+// types. We group them into the 6 source buckets the UI expects by detecting
+// the discriminator field on each record.
+type RawRecord = Record<string, string | number>;
+interface RawSourcesResponse {
+  total_signals?: number;
+  records?: RawRecord[];
+  sources?: SourceData[];
+}
+
+const SOURCE_DEFS: Array<{
+  id: string;
+  label: string;
+  tool: string;
+  icon: string;
+  match: (r: RawRecord) => boolean;
+}> = [
+  { id: "support_tickets",  label: "Support Tickets",     tool: "Zendesk / Freshdesk",     icon: "headset",         match: (r) => "ticket_id" in r },
+  { id: "crm_sales",        label: "CRM Sales Requests",  tool: "HubSpot / Salesforce",    icon: "briefcase",       match: (r) => "deal_id" in r },
+  { id: "cs_escalations",   label: "CS Escalations",      tool: "Gainsight / Vitally",     icon: "alert-triangle",  match: (r) => "case_id" in r },
+  { id: "nps_feedback",     label: "NPS Feedback",        tool: "Delighted / Qualtrics",   icon: "message-circle",  match: (r) => "response_id" in r || "nps_score" in r },
+  { id: "product_feedback", label: "Product Feedback",    tool: "Canny / Productboard",    icon: "lightbulb",       match: (r) => "request_id" in r || "feature_request" in r },
+  { id: "app_reviews",      label: "App Reviews",         tool: "Play Store / App Store",  icon: "star",            match: (r) => "review_id" in r || "rating" in r },
+];
+
+function normalizeSources(raw: RawSourcesResponse): SourcesResponse {
+  if (raw.sources && Array.isArray(raw.sources)) {
+    return { total_signals: raw.total_signals ?? raw.sources.reduce((n, s) => n + s.total_records, 0), sources: raw.sources };
+  }
+  const records = raw.records ?? [];
+  const sources: SourceData[] = SOURCE_DEFS.map((def) => {
+    const matched = records.filter(def.match);
+    return {
+      id: def.id,
+      label: def.label,
+      tool: def.tool,
+      icon: def.icon,
+      total_records: matched.length,
+      last_synced: "just now",
+      preview: matched.slice(0, 5),
+    };
+  });
+  return { total_signals: raw.total_signals ?? records.length, sources };
+}
+
+export async function fetchSources(): Promise<SourcesResponse> {
+  const raw = await jsonFetch<RawSourcesResponse>(ENDPOINTS.sources);
+  return normalizeSources(raw);
 }
 
 export function fetchPrioritization(): Promise<PrioritizationResponse> {
